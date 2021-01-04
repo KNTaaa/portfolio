@@ -1,0 +1,222 @@
+import csv
+import xlrd
+import openpyxl
+import glob
+
+#読み込むファイルの名前
+def filename(x):
+    text = "一括VSQdata/"
+    x1 = str(int(sheet.cell_value(x+1, 0)))
+    x2 = str(int(sheet.cell_value(x+1, 1)))
+    x3 = str(int(sheet.cell_value(x+1, 2)))
+    if len(x1) < 3:
+        for i in range(3-len(x1)):
+            text = text + "0"
+    text = text + x1 + "_"
+    if len(x2) < 3:
+        for i in range(3-len(x2)):
+            text = text + "0"
+    text = text + x2 + "_"
+    if len(x3) < 2:
+        for i in range(2-len(x3)):
+            text = text + "0"
+    text = text + x3 + "*.vsqx"
+    return text
+
+#ファイル読み込み
+def fileload(name,file_type):
+    if file_type == 2:
+        file_data = open(name,"r",encoding="utf-8_sig")
+    else:#保留
+        file_data = open(name,"r")
+    x = file_data.read()
+    x = x.splitlines()
+    return x
+
+def number(s):
+    try:
+        float(s)
+    except ValueError:
+        return False
+    else:
+        return True
+
+def data_make(data):
+    count_note = 0#音の総数
+    count_vbr = 0#VBR viblen>0
+    count_dur = []#音価
+    count_n = []#音高
+    count_t = []#テンポ
+    count_viblen = []#ヴィブラート長
+    for i in range(len(data)):
+        if data[i] == "\t\t\t<note>":
+            count_note = count_note + 1
+            for j in range(i,len(data)):
+                if data[i][4:7] == "<t>":
+                    count_t.append(int(data[i][7:(len(data[i])-4)]))
+        if data[i][5:8] == "dur":
+            count_dur.append(int(data[i][9:(len(data[i])-6)]))
+        if data[i][4:7] == "<n>":
+            count_n.append(int(data[i][7:(len(data[i])-4)]))          
+        if data[i][12:18] == "vibLen":
+            count_viblen.append(int(data[i][20:(len(data[i])-4)]))
+    for i in range(len(count_viblen)):
+        if count_viblen[i] > 0:
+            count_vbr = count_vbr + 1
+    return count_note,count_vbr,count_dur,count_n,count_t,count_viblen
+
+def data_make_type(data):
+    if data[1][1:5] == "vsq3":
+        return 3
+    elif data[1][1:5] == "vsq4":
+        return 4
+    else:
+        return 0
+        
+data = []
+data_name = [] #読み込んだ楽曲データの名称一覧
+count = 0 #曲の総数
+#1曲辺りのデータ
+note = 0#音の総数
+vbr = 0#ヴィブラートを含む音の総数
+dur = []#各音の音価
+n = []#各音の音階
+t = []#テンポ
+viblen = []#各音のヴィブラート長
+#全曲のデータ
+data_note = []
+data_vbr = []
+data_dur = []
+data_n = []
+data_t = []
+data_viblen = []
+
+wb = xlrd.open_workbook('一括VSQdata/一括VSQデータ.xlsx')
+sheet = wb.sheet_by_name('Sheet1')
+book = openpyxl.load_workbook('一括VSQdata/一括VSQデータ.xlsx')
+
+for i in range((book['Sheet1'].max_row)-1):
+    data = []
+    text = "一括VSQdata/"
+    #楽譜の条件:sheet.cell_value(i+1, x) = y
+    #x=2(main=1),x=5(mid=0,vsq=1,vsqx=2,vpr=3),x=6(vsqx3=3,vsqx4=4)
+    if sheet.cell_value(i+1, 2) == 1 and sheet.cell_value(i+1, 5) == 2 and sheet.cell_value(i+1, 6) == 4:#mainで
+        for file in glob.glob(filename(i)):
+            print(file)
+            data_name.append(file)
+            data=fileload(file,file_type)#data読み込み
+            count = count + 1
+            note,vbr,dur,n,t,viblen=data_make(data)
+            data_note.append(note)
+            data_vbr.append(vbr)
+            data_dur.append(dur)
+            data_n.append(n)
+            data_t.append(t)
+            data_viblen.append(viblen)
+            
+
+
+#各要素をExcelに出力
+with open('一括VSQdata/data_note_vsqx.csv', 'w') as file:
+    writer = csv.writer(file, lineterminator='\n')
+    for i in range(len(data_note)):
+        writer.writerow([data_note[i]])
+        
+with open('一括VSQdata/data_vbr_vsqx.csv', 'w') as file:
+    writer = csv.writer(file, lineterminator='\n')
+    for i in range(len(data_vbr)):
+        writer.writerow([data_vbr[i]])
+        
+with open('一括VSQdata/data_dur_vsqx.csv', 'w') as file:
+    writer = csv.writer(file, lineterminator='\n')
+    for i in range(len(data_dur)):
+        writer.writerow(data_dur[i])
+        
+with open('一括VSQdata/data_n_vsqx.csv', 'w') as file:
+    writer = csv.writer(file, lineterminator='\n')
+    for i in range(len(data_n)):
+        writer.writerow(data_n[i])
+        
+with open('一括VSQdata/data_t_vsqx.csv', 'w') as file:
+    writer = csv.writer(file, lineterminator='\n')
+    for i in range(len(data_t)):
+        writer.writerow(data_t[i])
+        
+        
+
+#音価ごとのヴィブラート出現率
+def onka(data_v,data_d):
+    #['16分音符','8分音符','4分音符','2分音符','全音符']※16分音符は付点16分音符まで含む，8~2分音符も同様
+    x_set = [0]*5 #音価ごとの音の出現数
+    y_set = [0]*5 #音価ごとのヴィブラートの出現数
+    xy_set = [0]*5 #各音価のヴィブラート出現率
+    for i in range(len(data_d)):
+        if data_d[i] <= 180:
+            x_set[0] = x_set[0] + 1
+        elif data_d[i] <= 360:
+            x_set[1] = x_set[1] + 1
+        elif data_d[i] <= 720:
+            x_set[2] = x_set[2] + 1
+        elif data_d[i] <= 1440:
+            x_set[3] = x_set[3] + 1
+        else:
+            x_set[4] = x_set[4] + 1
+        if data_v[i] > 0:
+            if data_d[i] <= 180:
+                y_set[0] = y_set[0] + 1
+            elif data_d[i] <= 360:
+                y_set[1] = y_set[1] + 1
+            elif data_d[i] <= 720:
+                y_set[2] = y_set[2] + 1
+            elif data_d[i] <= 1440:
+                y_set[3] = y_set[3] + 1
+            else:
+                y_set[4] = y_set[4] + 1
+    for i in range(len(xy_set)):
+        if x_set[i] != 0:
+            xy_set[i] = y_set[i] / x_set[i]
+    return x_set,y_set,xy_set
+    
+data_onka1 = []
+data_onka2 = []
+data_onka3 = []
+data_onka_x = []
+data_onka_y = []
+data_onka_xy = []
+
+for i in range(len(data_dur)):
+    data_onka1,data_onka2,data_onka3 = onka(data_viblen[i],data_dur[i])
+    data_onka_x.append(data_onka1)
+    data_onka_y.append(data_onka2)
+    data_onka_xy.append(data_onka3)
+    
+    
+
+#音高ごとのヴィブラート出現率
+def onko(data_v,data_no):
+　　#Notenum34~96(範囲63)
+    x_set = [0]*63 #音高ごとの音の出現数
+    y_set = [0]*63 #音高ごとのヴィブラートの出現数
+    xy_set = [0]*63 #各音高のヴィブラート出現率
+    for i in range(len(data_no)):
+        x_set[data_no[i]-34] = x_set[data_no[i]-34] + 1
+        if data_v[i] > 0:
+            y_set[data_no[i]-34] = y_set[data_no[i]-34] + 1
+    for i in range(len(xy_set)):
+        if x_set[i] != 0:
+            xy_set[i] = y_set[i] / x_set[i]
+    return x_set,y_set,xy_set
+
+
+data_onko1 = []
+data_onko2 = []
+data_onko3 = []
+data_onko_x = []
+data_onko_y = []
+data_onko_xy = []
+
+for i in range(len(data_n)):
+    data_onko1,data_onko2,data_onko3 = onko(data_viblen[i],data_n[i])
+    data_onko_x.append(data_onko1)
+    data_onko_y.append(data_onko2)
+    data_onko_xy.append(data_onko3)

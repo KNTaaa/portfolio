@@ -1,0 +1,100 @@
+#画像の前処理
+from keras.preprocessing.image import ImageDataGenerator
+train_dir = 'Restaurant/train'
+validation_dir = 'Restaurant/validation'
+
+#rescale
+train_datagen = ImageDataGenerator(rescale=1./255)
+test_datagen = ImageDataGenerator(rescale=1./255)
+
+#学習データ
+train_generator = train_datagen.flow_from_directory(
+        train_dir,
+        target_size=(128, 128),
+        batch_size=10,
+        class_mode='categorical')
+
+#検証データ
+validation_generator = test_datagen.flow_from_directory(
+        validation_dir,
+        target_size=(128, 128),
+        batch_size=1,
+        class_mode='categorical')
+
+label_dict = train_generator.class_indices
+print(label_dict)
+
+
+
+#モデル生成
+from keras import layers
+from keras import models
+from keras import optimizers
+from keras.layers import GlobalAveragePooling2D
+
+model = models.Sequential()
+model.add(layers.Conv2D(32, (3, 3), activation='relu',input_shape=(128, 128, 3)))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(64, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(128, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(128, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(GlobalAveragePooling2D())
+model.add(layers.Dense(32, activation='relu'))
+model.add(layers.Dense(10, activation='softmax'))
+
+model.compile(loss='categorical_crossentropy',optimizer=optimizers.RMSprop(lr=1e-4),metrics=['acc'])
+model.summary()
+
+
+
+#学習,グラフ表示
+history_adom = model.fit_generator(
+      train_generator,
+      steps_per_epoch=100,#354
+      epochs=1000,#20
+      validation_data=validation_generator,
+      validation_steps=56)
+model.save('Restaurant.h5')
+
+import pandas as pd
+import matplotlib.pyplot as plt
+%config InlineBackend.figure_formats = {'png', 'retina'}
+plt.subplot(1, 2, 2)
+plt.plot(history_adom.history["loss"], label = "loss")
+plt.plot(history_adom.history["val_loss"], label = "val_loss")
+plt.xlabel("epoch")
+plt.ylabel("loss")
+plt.title("loss")
+plt.legend(loc="best")
+plt.grid(color = 'gray', alpha = 0.2)
+plt.show()
+plt.subplot(1, 2, 2)
+plt.plot(history_adom.history["acc"], label = "acc")
+plt.plot(history_adom.history["val_acc"], label = "val_acc")
+plt.xlabel("epoch")
+plt.ylabel("acc")
+plt.title("acc")
+plt.legend(loc="best")
+plt.grid(color = 'gray', alpha = 0.2)
+plt.show()
+
+
+#予測
+from keras.models import load_model
+from keras.preprocessing.image import ImageDataGenerator
+model = load_model('Restaurant.h5')
+
+test_dir = 'Restaurant/test'
+test_datagen = ImageDataGenerator(rescale=1./255)
+test_generator = test_datagen.flow_from_directory(
+    test_dir,
+    target_size=(128,128),
+    batch_size=10,
+    class_mode='categorical')
+
+test_loss, test_acc = model.evaluate_generator(test_generator, steps=100)
+print('test loss:', test_loss)
+print('test acc:', test_acc)

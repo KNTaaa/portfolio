@@ -1,0 +1,235 @@
+import glob
+import numpy as np
+import csv
+import xlrd
+import pprint
+import openpyxl
+import scipy.linalg
+import scipy.stats
+
+from keras.utils.np_utils import to_categorical 
+from tensorflow.python.keras.utils import to_categorical
+from tensorflow.python.keras.models import Sequential
+from tensorflow.python.keras.layers import Input,Dense, Dropout, Activation, RNN,SimpleRNN,InputLayer,LSTM,GRU
+from tensorflow.python.keras.callbacks import TensorBoard
+from tensorflow.python.keras.models import Model
+from keras.optimizers import RMSprop,Adam
+from tensorflow.keras.models import load_model
+
+#読み込むファイルの名前
+def filename(x):
+    text = "一括USTdata/"
+    x1 = str(int(sheet.cell_value(x+1, 0)))
+    x2 = str(int(sheet.cell_value(x+1, 1)))
+    x3 = str(int(sheet.cell_value(x+1, 2)))
+    if len(x1) < 3:
+        for i in range(3-len(x1)):
+            text = text + "0"
+    text = text + x1 + "_"
+    if len(x2) < 3:
+        for i in range(3-len(x2)):
+            text = text + "0"
+    text = text + x2 + "_"
+    if len(x3) < 2:
+        for i in range(2-len(x3)):
+            text = text + "0"
+    text = text + x3
+    text = text + "*.ust"
+    return text
+
+#ファイル読み込み
+def fileload(name):
+    file_data = open(name,"r")
+    x = file_data.read()
+    x = x.splitlines()
+    return x
+
+#str型からfloat型に変換可能か判定
+def number(s):
+    try:
+        float(s)
+    except ValueError:
+        return False
+    else:
+        return True
+
+#休符判定
+def rest(s):
+    bre_txt = ["息","R"]
+    main_txt = {"あ","い","う","え","お","か","き","く","け","こ","さ","し","す","せ","そ","た","ち","つ","て","と","な","に","ぬ","ね","の","は","ひ","ふ","へ","ほ","ま","み","む","め","も","や","ゆ","よ","ら","り","る","れ","ろ","わ","を","ん","が","ぎ","ぐ","げ","ご","ざ","じ","ず","ぜ","ぞ","だ","ぢ","づ","で","ど","ば","び","ぶ","べ","ぼ","ぱ","ぴ","ぷ","ぺ","ぽ","ヴ","キ"}
+    bre = 0
+    main = 0
+    if s != "":
+        for i in range(len(s)):
+            if s[i] in main_txt:
+                main = 1
+            if s[i] in bre_txt:
+                bre = 1
+    if main == 1 and bre == 0:
+        return False#休符じゃない
+    else:
+        return True
+    
+def data_make_part(data):
+    Set = []
+    Set2 = []
+    Set3 = []
+    Set4 = []
+    for i in range(len(data)):
+        if data[i][0:6] == "Length" or data[i][0:5] == "Lyric" or data[i][0:7] == "NoteNum" or data[i][0:4] == "PBS=" or data[i][0:3] == "PBW" or data[i][0:3] == "PBY" or data[i][0:3] == "PBM":
+            Set.append(data[i])
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            Set2.append([0,0,0])
+            Set3.append([[0],[0],[0]])
+    x = -1
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            x = x + 1
+            Set2[x][0] = int(Set[i][7:]) 
+        if Set[i][0:5] == "Lyric":#休符なら0,音があれば1
+            if rest(Set[i][6:]):
+                Set2[x][1] = 0
+            else:
+                Set2[x][1] = 1
+        if Set[i][0:7] == "NoteNum":
+            Set2[x][2] = int(Set[i][8:])
+        if Set[i][0:3] == "PBS":
+            Set3[x][0] = Set[i][4:].split(";")
+        if Set[i][0:3] == "PBW":
+            Set3[x][1] = Set[i][4:].split(",")
+        if Set[i][0:3] == "PBY":
+            Set3[x][2] = Set[i][4:].split(",")
+    for i in range(len(Set3)):
+        for j in range(3):
+            for k in range(len(Set3[i][j])):
+                if Set3[i][j][k] == "":
+                    Set3[i][j][k] = 0
+                else:
+                    Set3[i][j][k] = float(Set3[i][j][k])
+    for i in range(len(Set3)):
+        Set4.append(Set2[i]+Set3[i])
+    return Set4
+
+def data_pitch_part(data):
+    pitch_set = []#音価/1960,休符の有無,音高/24~96
+    portament_set = []
+    for i in range(len(data)):
+        PBS = []
+        PBW = []
+        PBY = []
+        pitch_part = []
+        PBS = data[i][3]
+        if len(data[i][3]) == 1:
+            PBS.append(0)
+        PBS = PBS
+        PBW = data[i][4]
+        PBY = data[i][5]
+        if len(PBW) > len(PBY):#xとyの要素数が異なる
+            while len(PBW) != len(PBY):
+                PBY.append(0)
+        pitch_part.append(PBS)
+        for j in range(len(PBW)):
+            pitch_part.append([PBW[j]]+[PBY[j]])
+        #ピッチポイント10までOK
+        if len(pitch_part) < 10:
+            for j in range(10-len(pitch_part)):
+                pitch_part.append([0,0])
+        
+        pitch_set.append(data[i][0:3])
+        portament_set.append(pitch_part)
+        
+    return pitch_set,portament_set
+    
+
+
+data = []
+x = ""
+Set_part = []
+Set_part_pitch = []
+Set_part_portament = []
+s1 = []
+s2 = []
+tempo_mod = 0
+count = 0
+
+wb = xlrd.open_workbook('一括USTdata/data一覧実験用(temp修正).xlsx')
+sheet = wb.sheet_by_name('Sheet1')
+book = openpyxl.load_workbook('一括USTdata/data一覧実験用(temp修正).xlsx')
+
+for i in range((book['Sheet1'].max_row)-1):
+    data = []
+    text = "一括USTdata/"
+    #楽譜の条件:sheet.cell_value(i+1, x) = y
+    #x=0(UST製作者y),x=1(曲番y),x=2(曲番y ※y=1のみ使用),x=4(学習用フラグy)
+    if sheet.cell_value(i+1, 0) == 0:
+    #if sheet.cell_value(i+1, 0) == 1 and sheet.cell_value(i+1, 4) == 1:
+        for file in glob.glob(filename(i)):
+            print(file)
+            data=fileload(file)#UST読み込み
+            Set_part = data_make_part(data)#必要なデータ抽出
+            tempo_mod = sheet.cell_value(i+1, 15)
+            s1,s2 = data_pitch_part(Set_part)
+            Set_part_pitch.append(s1)
+            Set_part_portament.append(s2)
+            count = count + 1
+            
+for i in range(len(Set_part_pitch)):
+    for j in range(len(Set_part_pitch[i])):
+        Set_part_pitch[i][j][0] = Set_part_pitch[i][j][0] / 1920 #全音符 = 1
+        Set_part_pitch[i][j][2] = (Set_part_pitch[i][j][2] -24) / 72 #(24~96)
+
+Set_part_portament3 = []
+for i in range(len(Set_part_portament)):
+    Set_part_portament2 = []
+    for j in range(len(Set_part_portament[i])):
+        for k in range(len(Set_part_portament[i][j])):
+            Set_part_portament[i][j][k][0] = Set_part_portament[i][j][k][0] / 1920 #全音符 = 1
+            Set_part_portament[i][j][k][1] = Set_part_portament[i][j][k][1] / 120 #オクターブ = 1
+        Set_part_portament2.append(Set_part_portament[i][j][0] + Set_part_portament[i][j][1] + Set_part_portament[i][j][2] + Set_part_portament[i][j][3] + Set_part_portament[i][j][4] + Set_part_portament[i][j][5] + Set_part_portament[i][j][6] + Set_part_portament[i][j][7] + Set_part_portament[i][j][8] + Set_part_portament[i][j][9])
+    Set_part_portament3.append(Set_part_portament2)
+
+Set_input = []
+for i in range(len(Set_part_pitch)):
+    for j in range(len(Set_part_pitch[i])):
+        for k in reversed(range(0, 32)):
+            if j - k >= 0:
+                Set_input.append(Set_part_pitch[i][j - k])
+            else:
+                Set_input.append([0.0, 0.0, 0.0])
+                
+x1_train = np.array(Set_input).reshape(-1, 32 ,3)
+y1_train = np.array(Set_part_portament).reshape(-1, 20)
+
+#学習モデル作成
+model = Sequential() 
+model.add(LSTM(units=32,input_shape=(32,3),activation='tanh'))#32,32,38
+model.add(Dense(units=20,activation='linear'))#3
+
+model.compile(optimizer='adam',loss='mean_squared_error',metrics=['accuracy'])
+tsb=TensorBoard(log_dir='./logs')
+#history_adom=model.fit(x1_train,y1_train,batch_size=128,epochs=3000,validation_split=0.1,callbacks=[tsb])#128
+history_adom=model.fit(x1_train,y1_train,batch_size=128,epochs=10000,callbacks=[tsb])#128
+model.save('test.h5')
+
+import pandas as pd
+import matplotlib.pyplot as plt
+%config InlineBackend.figure_formats = {'png', 'retina'}
+plt.subplot(1, 2, 2)
+plt.plot(history_adom.history["loss"], label = "loss")
+plt.plot(history_adom.history["val_loss"], label = "val_loss")
+plt.xlabel("epoch")
+plt.ylabel("loss")
+plt.title("loss")
+plt.legend(loc="best")
+plt.grid(color = 'gray', alpha = 0.2)
+plt.show()
+plt.subplot(1, 2, 2)
+plt.plot(history_adom.history["acc"], label = "acc")
+plt.plot(history_adom.history["val_acc"], label = "val_acc")
+plt.xlabel("epoch")
+plt.ylabel("acc")
+plt.title("acc")
+plt.legend(loc="best")
+plt.grid(color = 'gray', alpha = 0.2)
+plt.show()

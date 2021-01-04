@@ -1,0 +1,396 @@
+import csv
+import xlrd
+import openpyxl
+import glob
+
+#読み込むファイルの名前
+def filename(x):
+    text = "16分割USTdata/"
+    x1 = str(int(sheet.cell_value(x+1, 0)))
+    x2 = str(int(sheet.cell_value(x+1, 1)))
+    x3 = str(int(sheet.cell_value(x+1, 2)))
+    if len(x1) < 3:
+        for i in range(3-len(x1)):
+            text = text + "0"
+    text = text + x1 + "_"
+    if len(x2) < 3:
+        for i in range(3-len(x2)):
+            text = text + "0"
+    text = text + x2 + "_"
+    if len(x3) < 2:
+        for i in range(2-len(x3)):
+            text = text + "0"
+    text = text + x3
+    text = text + "*.ust"
+    return text
+
+#ファイル読み込み
+def fileload(name):
+    file_data = open(name,"r")
+    x = file_data.read()
+    x = x.splitlines()
+    return x
+    
+#休符の判定
+def rest(s):
+    bre_txt = ["息","R"]
+    main_txt = {"あ","い","う","え","お","か","き","く","け","こ","さ","し","す","せ","そ","た","ち","つ","て","と","な","に","ぬ","ね","の","は","ひ","ふ","へ","ほ","ま","み","む","め","も","や","ゆ","よ","ら","り","る","れ","ろ","わ","を","ん","が","ぎ","ぐ","げ","ご","ざ","じ","ず","ぜ","ぞ","だ","ぢ","づ","で","ど","ば","び","ぶ","べ","ぼ","ぱ","ぴ","ぷ","ぺ","ぽ","ヴ","キ"}
+    bre = 0
+    main = 0
+    if s != "":
+        for i in range(len(s)):
+            if s[i] in main_txt:
+                main = 1
+            if s[i] in bre_txt:
+                bre = 1
+    if main == 1 and bre == 0: #メインテキストを含む,breathの記号を含まない
+        return True #休符じゃない
+    else:
+        return False #休符
+
+#各データの抽出
+#テンポ※最初に指定されたテンポ(テンポが変わる楽曲はtempo2に表記)
+def tempo(data):
+    t = 0
+    for i in range(len(data)):
+        if data[i][0:5] == "Tempo":
+            t = float(data[i][6:])
+    return t
+
+#音階の範囲
+def notenum(data):
+    Set = [] #音高のセット
+    Set_n = [] #休符を除いた音高のセット
+    n_max = 0 #最大音高
+    n_min = 0 #最小音高
+    for i in range(len(data)):
+        if data[i][0:5] == "Lyric" or data[i][0:7] == "NoteNum": #楽譜から歌詞と音高を抽出(歌詞は休符の判定用)
+            Set.append(data[i])
+    for i in range(len(Set)):
+        if Set[i][0:5] == "Lyric":
+            if rest(Set[i][6:]): #休符の判定
+                Set_n.append(int(Set[i+1][8:]))
+    if len(Set_n) != 0: #全て休符だった場合,n_maxとn_minは0を返す
+        n_max = max(Set_n)
+        n_min = min(Set_n)
+    return n_max,n_min
+
+#すべての音符が16分音符で分割可能かどうか※最小公倍数が120になる
+def sep16(data):
+    Set = [] #音価のセット
+    flag = 1
+    for i in range(len(data)):
+        if data[i][0:6] == "Length": #楽譜から音価を抽出
+            Set.append(int(data[i][7:]))
+    for i in range(len(Set)):
+        if Set[i] % 120 != 0 or Set[i] <= 0: #120で割れるか否か
+            flag = 0
+            break
+    return flag
+    
+#編集モード
+def mode(data):
+    mode = 1
+    for i in range(len(data)):
+        if data[i] == "Mode2=True":
+            mode = 2
+    return mode
+
+#音符の総数をカウント
+def counter(data):
+    Set = [] #歌詞のセット
+    Set_rest = [] #休符の有無のセット
+    all1 = 0 #音符の総数(休符を含む)
+    all2 = 0 #音符の総数(休符が連続している箇所を1つの休符として扱う)
+    norest = 0 #音符の総数(休符を除く)
+    VBR = 0 #ヴィブラートの総数
+    for i in range(len(data)):
+        if data[i][0:3] == "VBR": #ヴィブラートを含む
+            VBR = VBR + 1 #ヴィブラートの総数を加算
+        if data[i][0:5] == "Lyric": #歌詞を抽出
+            all1 = all1 + 1
+            Set.append(data[i][6:])
+    for i in range(len(Set)):
+        if rest(Set[i]): #休符ではない
+            norest = norest + 1 #休符を除く総数を加算
+            Set_rest.append(1)
+        else:
+            Set_rest.append(0)
+    for i in range(len(Set_rest)):
+        if i != 0 and Set_rest[i] == 0 and Set_rest[i-1] == 0: #前の音が休符で現在の音も休符だった場合、all2は加算しない
+            all2 = all2
+        else:
+            all2 = all2 + 1
+    return all1,all2,norest,VBR
+
+#1小節当たりの音符出現数，1拍当たりの音符出現数
+def measure_set(data):
+    Set = [] #歌詞セット
+    Set_rest = [] #歌詞セット(休符を除く)
+    x = 0
+    length = [] #音価セット
+    length01 = [] #音価セット(休符を除く)
+    measure_sets = [0]*65 #1小節当たりの音符出現数(最大64)
+    beat_sets = [0]*4 #何拍目から音が始まるか(楽譜は4拍子とする)
+    length_total = 0
+    length_total2 = 0
+    total = 0
+    for i in range(len(data)):
+        if data[i][0:5] == "Lyric":
+            Set.append(data[i][6:])
+        if data[i][0:6] == "Length":
+            length.append(int(data[i][7:]))
+    for i in range(len(Set)):
+        if rest(Set[i]):
+            Set_rest.append(1)
+        else:
+            Set_rest.append(0)
+    for i in range(len(Set_rest)):
+        x = 0
+        while len(Set_rest) > i+x and Set_rest[i+x] == 0:
+            if x != 0:
+                length[i] = length[i] + length[i+x]
+            x = x + 1
+    for i in range(len(Set_rest)):
+        if i != 0 and Set_rest[i] == 0 and Set_rest[i-1] == 0:
+            length_rest = length_rest
+        else:
+            length_rest.append(length[i])
+    for i in range(len(length01)):
+        if length_total % 1920 < 480:
+            beat_sets[0] = beat_sets[0]+1
+        elif length_total % 1920 < 960:
+            beat_sets[1] = beat_sets[1]+1
+        elif length_total % 1920 < 1440:
+            beat_sets[2] = beat_sets[2]+1
+        else:
+            beat_sets[3] = beat_sets[3]+1
+        length_total = length_total + length_rest[i]
+    for i in range(len(length_rest)):
+        total = total + 1
+        length_total2 = length_total2 + length_rest[i]
+        while length_total2 >= 1920:
+            length_total2 = length_total2 - 1920
+            measure_sets[total] = measure_sets[total] + 1
+            total = 0
+        if i+1 == len(length01) and length_total2 != 0:
+            measure_sets[total] = measure_sets[total] + 1
+    return measure_sets,beat_sets
+
+#音声ライブラリのタイプ
+def type_test(data):
+    Set = [] #歌詞のセット
+    types = 2 #特殊な音源
+    main_txt = {"あ","い","う","え","お","か","き","く","け","こ","さ","し","す","せ","そ","た","ち","つ","て","と","な","に","ぬ","ね","の","は","ひ","ふ","へ","ほ","ま","み","む","め","も","や","ゆ","よ","ら","り","る","れ","ろ","わ","を","ん","が","ぎ","ぐ","げ","ご","ざ","じ","ず","ぜ","ぞ","だ","ぢ","づ","で","ど","ば","び","ぶ","べ","ぼ","ぱ","ぴ","ぷ","ぺ","ぽ","ヴ","キ"}
+    for i in range(len(data)):
+        if data[i][0:5] == "Lyric":
+            Set.append(data[i][6:])
+    for i in range(len(Set)):
+        if Set[i] in main_txt:
+            types = 0 #単独音
+        elif len(Set[i]) != 0 and Set[i][0] == "-":
+            types = 1 #連続音
+    return types
+
+#クロマグラム表記用
+def chroma(data):
+    Set = []
+    Set2 = []
+    chroma_length = [0]*12 #音価を加算
+    chroma_count = [0]*12 #音符の個数を加算
+    for i in range(len(data)):
+        if data[i][0:6] == "Length" or data[i][0:5] == "Lyric" or data[i][0:7] == "NoteNum":
+            Set.append(data[i])
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            Set2.append([0,0,0])
+    x = -1
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            x = x + 1
+            Set2[x][0] = int(Set[i][7:]) 
+        if Set[i][0:5] == "Lyric": #休符なら0,音があれば1
+            if rest(Set[i][6:]):
+                Set2[x][1] = 1
+            else:
+                Set2[x][1] = 0
+        if Set[i][0:7] == "NoteNum":
+            Set2[x][2] = int(Set[i][8:])
+    for i in range(len(Set2)):
+        if Set2[i][1] == 1:
+            chroma_length[Set2[i][2]%12] = chroma_length[Set2[i][2]%12] + Set2[i][0]
+            chroma_count[Set2[i][2]%12] = chroma_count[Set2[i][2]%12] + 1
+    return chroma_length,chroma_count
+
+#音価ごとのヴィブラート出現率
+def onka(data_v,data_d):
+    #['16分音符','8分音符','4分音符','2分音符','全音符']※16分音符は付点16分音符まで含む，8~2分音符も同様
+    Set = [] #音価,音高,歌詞,ヴィブラートのセット
+    Set2 = [] #Setを1音ごとにリスト
+    x_set = [0]*5 #音価ごとの音の出現数
+    y_set = [0]*5 #音価ごとのヴィブラートの出現数
+    xy_set = [0]*5 #各音価のヴィブラート出現率
+    for i in range(len(data)):
+        if data[i][0:6] == "Length" or data[i][0:5] == "Lyric" or data[i][0:7] == "NoteNum" or data[i][0:3] == "VBR":
+            Set.append(data[i])
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            Set2.append([0,0,0,0])
+    x = -1
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            x = x + 1
+            Set2[x][0] = int(Set[i][7:]) 
+        if Set[i][0:5] == "Lyric":#休符なら0,音があれば1
+            if rest(Set[i][6:]):
+                Set2[x][1] = 1
+            else:
+                Set2[x][1] = 0
+        if Set[i][0:7] == "NoteNum":
+            Set2[x][2] = int(Set[i][8:])
+        if Set[i][0:3] == "VBR":
+            Set2[x][3] = 1
+    for i in range(len(Set2)):
+        if Set2[i][1] == 1:
+            if Set2[i][0] <= 180:
+                x_set[0] = x_set[0] + 1
+            elif Set2[i][0] <= 360:
+                x_set[1] = x_set[1] + 1
+            elif Set2[i][0] <= 720:
+                x_set[2] = x_set[2] + 1
+            elif Set2[i][0] <= 1440:
+                x_set[3] = x_set[3] + 1
+            else:
+                x_set[4] = x_set[4] + 1
+        if Set2[i][3] == 1:
+            if Set2[i][0] <= 180:
+                y_set[0] = y_set[0] + 1
+            elif Set2[i][0] <= 360:
+                y_set[1] = y_set[1] + 1
+            elif Set2[i][0] <= 720:
+                y_set[2] = y_set[2] + 1
+            elif Set2[i][0] <= 1440:
+                y_set[3] = y_set[3] + 1
+            else:
+                y_set[4] = y_set[4] + 1
+    for i in range(5):
+        if x_set[i] != 0:
+            xy_set[i] = y_set[i] / x_set[i]
+    return x_set,y_set,xy_set
+
+#音高ごとのヴィブラート出現率
+def onko(data):
+    #Notenum29~98(範囲70)
+    Set = [] #音価,音高,歌詞,ヴィブラートのセット
+    Set2 = [] #Setを1音ごとにリスト
+    x_set = [0]*70 #音高ごとの音の出現数
+    y_set = [0]*70 #音高ごとのヴィブラートの出現数
+    xy_set = [0]*70 #各音高のヴィブラート出現率
+    for i in range(len(data)):
+        if data[i][0:6] == "Length" or data[i][0:5] == "Lyric" or data[i][0:7] == "NoteNum" or data[i][0:3] == "VBR":
+            Set.append(data[i])
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            Set2.append([0,0,0,0])
+    x = -1
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            x = x + 1
+            Set2[x][0] = int(Set[i][7:]) 
+        if Set[i][0:5] == "Lyric":#休符なら0,音があれば1
+            if rest(Set[i][6:]):
+                Set2[x][1] = 1
+            else:
+                Set2[x][1] = 0
+        if Set[i][0:7] == "NoteNum":
+            Set2[x][2] = int(Set[i][8:])
+        if Set[i][0:3] == "VBR":
+            Set2[x][3] = 1
+    for i in range(len(Set2)):
+        if Set2[i][1] == 1:
+            x_set[Set2[i][2]-29] = x_set[Set2[i][2]-29] + 1
+        if Set2[i][3] == 1:
+            y_set[Set2[i][2]-29] = y_set[Set2[i][2]-29] + 1
+    for i in range(len(xy_set)):
+        if x_set[i] != 0:
+            xy_set[i] = y_set[i] / x_set[i]
+    return x_set,y_set,xy_set
+
+#他各要素の出現有無
+def PreUtterance(data):
+    for i in range(len(data)):
+        if data[i][0:12] == "PreUtterance":
+            if len(data[i]) > 13:
+                return 1
+    return 0
+
+def VoiceOverlap(data):
+    for i in range(len(data)):
+        if data[i][0:12] == "VoiceOverlap":
+            return 1
+    return 0
+
+def Intensity(data):
+    for i in range(len(data)):
+        if data[i][0:9] == "Intensity":
+            if data[i] != "Intensity=100":
+                return 1
+    return 0
+
+def tempo2(data):
+    tempo_counter = 0
+    for i in range(len(data)):
+        if data[i][0:5] == "Tempo":
+            tempo_counter = tempo_counter + 1
+    return tempo_counter
+
+def Moduration(data):
+    for i in range(len(data)):
+        if data[i][0:10] == "Moduration":
+            if data[i] != "Moduration=0":
+                return 1
+    return 0
+
+def Velocity(data):
+    for i in range(len(data)):
+        if data[i][0:8] == "Velocity":
+            return 1
+    return 0
+
+def Bre(data):
+    bre_counter = 0
+    for i in range(len(data)):
+        if data[i][0:5] == "Flags":
+            for j in range(6,len(data[i])):
+                if data[i][j] in "b" or data[i][j] in "B":
+                    bre_counter = bre_counter + 1
+    return bre_counter
+    
+
+
+
+data = []
+data_onka1 = []
+data_onka2 = []
+data_onka3 = []
+data_onka_x = []
+data_onka_y = []
+data_onka_xy = []
+
+wb = xlrd.open_workbook('一括USTdata/data一覧実験用(temp修正).xlsx')
+sheet = wb.sheet_by_name('Sheet1')
+book = openpyxl.load_workbook('一括USTdata/data一覧実験用(temp修正).xlsx')
+
+for i in range((book['Sheet1'].max_row)-1):
+    data = []
+    text = "一括USTdata/"
+    #楽譜の条件:sheet.cell_value(i+1, x) = y
+    #x=0(UST製作者y),x=1(曲番y),x=2(曲番y ※y=1のみ使用),x=4(学習用フラグy)
+    if sheet.cell_value(i+1, 0) >= 1:
+        for file in glob.glob(filename(i)):
+            print(file)
+            data=fileload(file)#UST読み込み
+            #data_onko1,data_onko2,data_onko3 = onko(data)　#各要素を入力
+            #data_onko_x.append(data_onko1)
+            #data_onko_y.append(data_onko2)
+            #data_onko_xy.append(data_onko3)

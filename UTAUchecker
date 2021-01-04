@@ -1,0 +1,90 @@
+#各種インポート
+import glob
+
+#ustをロード
+def fileload(name):
+    file_data = open(name,"r")
+    x = file_data.read()
+    x = x.splitlines()
+    return x
+
+#ustから必要なデータを抽出
+def data_make_part(data):
+    Set = []
+    Set2 = []
+    for i in range(len(data)):
+        #必要なデータ(Length=音価[tick],NoteNum=音高,VBR=ヴィブラート)
+        if data[i][0:6] == "Length":
+            Set2.append([0,0,0])
+            Set.append(data[i])
+        elif data[i][0:7] == "NoteNum" or data[i][0:3] == "VBR":
+            Set.append(data[i])
+    x = -1
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            x = x + 1#次の音
+            Set2[x][0] = int(Set[i][7:]) 
+        if Set[i][0:7] == "NoteNum":
+            Set2[x][1] = int(Set[i][8:])
+        if Set[i][0:3] == "VBR":#今回はVBRがあるかどうかのみ
+            Set2[x][2] = 1
+    return Set2
+
+#ヴィブラートの出現数を判定(1回以上出現するか)
+def VBRchecker(data):
+    count = 0
+    for i in range(len(data)):
+        count = count + data[i][2]
+    if count != 0:
+        print("{}{}{}".format("ヴィブラート：OK(ヴィブラート数：",str(count),")"))
+    else:
+        print("ヴィブラート：NG") #ヴィブラートを含まない
+
+#音高の最大値と最低値を判定(C3~B5の範囲に収まっているか)
+def NoteNumchecker(data):
+    NNmax = 24#音高の最大値
+    NNmin = 107#音高の最低値
+    for i in range(len(data)):
+        if data[i][1] > NNmax:
+            NNmax = data[i][1]
+        if data[i][1] < NNmin:
+            NNmin = data[i][1]
+    if NNmax <= 83 and NNmin >= 48:#指定範囲内
+        print("音高：OK")
+    elif NNmax <= 95 and NNmin >= 60:
+        print("音高：error(1オクターブ下げて修正可)")
+    elif NNmax <= 107 and NNmin >= 72:
+        print("音高：error(2オクターブ下げて修正可)")
+    elif NNmax <= 71 and NNmin >= 36:
+        print("音高：error(1オクターブ上げて修正可)")
+    elif NNmax <= 59 and NNmin >= 24:
+        print("音高：error(2オクターブ上げて修正可)")
+    else:
+        print("音高：error(修正余地なし)")
+        
+#音価が120(16分音符)で割れるか判定
+def Lengthchecker(data):
+    error = []
+    for i in range(len(data)):
+        if data[i][0] % 120 != 0:
+            error.append(i)
+    if len(error) == 0:#16分音符で
+        print("音価：OK")
+    else:
+        print("{}{}{}".format("音価：error(エラー数：",str(len(error)),")"))
+        
+        
+
+print("passを入力")
+pas = input()
+for file in glob.glob(pas):
+    data=fileload(file)
+    Set_part = data_make_part(data)
+    print(pas+"　読込完了")
+    
+#条件1:ヴィブラートが含まれているか
+VBRchecker(Set_part)
+#条件2:音高が範囲内か
+NoteNumchecker(Set_part)
+#条件3:音価が16分音符で割り切れるか
+Lengthchecker(Set_part)

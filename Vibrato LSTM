@@ -1,0 +1,581 @@
+import glob
+import numpy as np
+import csv
+import xlrd
+import openpyxl
+
+from tensorflow.python.keras.utils import to_categorical
+from tensorflow.python.keras.models import Sequential
+from tensorflow.python.keras.layers import Dense, LSTM
+from tensorflow.python.keras.callbacks import TensorBoard
+from tensorflow.python.keras.models import Model,load_model
+
+#読み込むファイルの名前
+def filename(x):
+    text = "一括USTdata/"
+    x1 = str(int(sheet.cell_value(x+1, 0)))
+    x2 = str(int(sheet.cell_value(x+1, 1)))
+    x3 = str(int(sheet.cell_value(x+1, 2)))
+    if len(x1) < 3:
+        for i in range(3-len(x1)):
+            text = text + "0"
+    text = text + x1 + "_"
+    if len(x2) < 3:
+        for i in range(3-len(x2)):
+            text = text + "0"
+    text = text + x2 + "_"
+    if len(x3) < 2:
+        for i in range(2-len(x3)):
+            text = text + "0"
+    text = text + x3
+    text = text + "*.ust"
+    return text
+
+#ファイル読み込み
+def fileload(name):
+    file_data = open(name,"r")
+    x = file_data.read()
+    x = x.splitlines()
+    return x
+
+#str型からfloat型に変換可能か判定
+def number(s):
+    try:
+        float(s)
+    except ValueError:
+        return False
+    else:
+        return True
+
+#休符判定
+def rest(s):
+    bre_txt = ["息","R"]
+    main_txt = {"あ","い","う","え","お","か","き","く","け","こ","さ","し","す","せ","そ","た","ち","つ","て","と","な","に","ぬ","ね","の","は","ひ","ふ","へ","ほ","ま","み","む","め","も","や","ゆ","よ","ら","り","る","れ","ろ","わ","を","ん","が","ぎ","ぐ","げ","ご","ざ","じ","ず","ぜ","ぞ","だ","ぢ","づ","で","ど","ば","び","ぶ","べ","ぼ","ぱ","ぴ","ぷ","ぺ","ぽ","ヴ","キ"}
+    bre = 0
+    main = 0
+    if s != "":
+        for i in range(len(s)):
+            if s[i] in main_txt:
+                main = 1
+            if s[i] in bre_txt:
+                bre = 1
+    if main == 1 and bre == 0:
+        return False#休符じゃない
+    else:
+        return True
+    
+def data_make_part(data):
+    Set = []
+    Set2 = []
+    for i in range(len(data)):
+        if data[i][0:6] == "Length" or data[i][0:5] == "Lyric" or data[i][0:7] == "NoteNum" or data[i][0:3] == "VBR":
+            Set.append(data[i])
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            Set2.append([0,0,0,0,0,0,0,0,0,0])
+    x = -1
+    for i in range(len(Set)):
+        if Set[i][0:6] == "Length":
+            x = x + 1
+            Set2[x][0] = int(Set[i][7:]) 
+        if Set[i][0:5] == "Lyric":#休符なら0,音があれば1
+            if rest(Set[i][6:]):
+                Set2[x][1] = 0
+            else:
+                Set2[x][1] = 1
+        if Set[i][0:7] == "NoteNum":
+            Set2[x][2] = int(Set[i][8:])
+        if Set[i][0:3] == "VBR":
+            VBR = Set[i][4:]
+            VBR = VBR.split(',')
+            if number(VBR[0]) == True:
+                Set2[x][3] = float(VBR[0])
+            if number(VBR[1]) == True:
+                Set2[x][4] = float(VBR[1])
+            if number(VBR[2]) == True:
+                Set2[x][5] = float(VBR[2])
+            if number(VBR[3]) == True:
+                Set2[x][6] = float(VBR[3])
+            if number(VBR[4]) == True:
+                Set2[x][7] = float(VBR[4])
+            if number(VBR[5]) == True:
+                Set2[x][8] = float(VBR[5])
+            if number(VBR[6]) == True:
+                Set2[x][9] = float(VBR[6])
+    return Set2
+
+#音価,音高そのまま
+def data_make(data,tempo_mod):
+    Set_input = []
+    Set_input2 = []
+    Set_input3 = []
+    Set_input4 = []
+    Set_output_binary = []
+    Set_output_7s = []
+    Set_output_binary2 = []
+    Set_output_7s2 = []
+    all_length = 0
+    number1 = []#
+    number2 = []#
+    
+    #ワンホットベクター
+    for i in range(len(data)):
+        part = [0,0,0,0]#音価(x),音高(x),休符(2),配置(4) #音価は7200=1,音高は24~107で24=0
+        #音価
+        part[0] = data[i][0] / tempo_mod
+        
+        #音高
+        part[1] = data[i][2]
+        
+        #休符
+        if data[i][1] == 1:#休符なら0,音があれば1
+            part[2] = 1
+        
+        #配置
+        if all_length%1920 >= 1440:
+            part[3] = 3/3
+        elif all_length%1920 >= 960:
+            part[3] = 2/3
+        elif all_length%1920 >= 480:
+            part[3] = 1/3
+        else:
+            part[3] = 0
+            
+        Set_input.append(part)
+        
+        #ヴィブラート[休符,無,有]
+        if data[i][3] != 0:
+            Set_output_binary.append(2)
+        else:
+            if data[i][1] == 0:
+                Set_output_binary.append(0)
+            else:
+                Set_output_binary.append(1)
+        Set_output_7s.append(data[i][3:])
+        all_length = all_length + data[i][0]
+        
+    #連続した休符をまとめる
+    rest1 = []#休符か否かの0,1
+    keep2 = 0#前の音が休符か否か判定
+    for i in range(len(Set_input)):
+        rest1.append(Set_input[i][2])
+    for i in range(len(rest1)):
+        if rest1[i] == 1:#音あり
+            number1.append(i)
+            keep2 = 0
+        elif rest1[i] == 0 and keep2 == 0:#休符始め
+            number1.append(i)
+            keep2 = keep2 + 1
+        else:
+            Set_input[i - keep2][0] = Set_input[i - keep2][0] + Set_input[i][0]
+            keep2 = keep2 + 1
+    for i in range(len(number1)):
+        Set_input2.append(Set_input[number1[i]])
+        
+    #削除した入力データに合わせて、出力データを削除
+    for i in range(len(number1)):
+        Set_output_binary2.append(Set_output_binary[number1[i]])
+        Set_output_7s2.append(Set_output_7s[number1[i]])
+    
+    #len(Set_input3)%32 == 0になるように調整
+    while len(Set_input2) % 32 != 0:
+        Set_input2.append([0,0,0,0])
+        Set_output_binary2.append(0)
+        Set_output_7s2.append([0,0,0,0,0,0,0])
+        number1.append(max(number1)+1)
+    
+    #RNN用に加工
+    for i in range(len(Set_input2)):
+        for j in range(32):
+            if i + j - 31 < 0:
+                Set_input3.append([0,0,0,0])
+            else:
+                Set_input3.append(Set_input2[i+j-31])
+                
+    return Set_input3,Set_output_binary2,Set_output_7s2,number1
+
+#正規化
+def Inormalize(data):#音価は7200=1,音高は24~107で24=0
+    for i in range(len(data)):
+        data[i][0] = data[i][0] / 7200
+    for i in range(len(data)):
+        if data[i][0] != 0:
+            data[i][1] = (data[i][1] - 24) / (107-24)
+    return data
+ 
+ #正規化(パラメータの範囲を0～1にする)
+def Znormalize(data):
+    mean = [0]*7
+    var = [0]*7
+    for i in range(7):
+        new_list = []
+        sums = 0
+        for j in range(len(data)):
+            if j % 7 == i:
+                new_list.append(data[j])
+        if new_list != [0,0,0,0,0,0,0]:
+            sums = sum(new_list)
+            x = sums / len(new_list)
+            mean[i] = sums / len(new_list)
+            new_list_np = np.array(new_list)
+            var[i] = np.std(new_list_np)
+    for i in range(len(data)):
+        if var[i%7] != 0:
+            data[i] = (data[i] - mean[i%7]) / var[i%7]
+        else:
+            data[i] = 0
+    return mean,var,data
+
+#正規化した値を元の範囲に戻す
+def reZnormalize(data,mean,var):
+    for i in range(len(data)):
+        for j in range(7):
+            data[i][j] = data[i][j] * var[j] + mean[j]
+    return data
+ 
+ 
+
+data = []
+x = ""
+Set_part = []
+Set_input_part = []
+Set_output_binary_part = []
+Set_output_7s_part = []
+Set_input = []
+Set_input2 = []
+Set_output_binary = []
+Set_output_7s = []
+numbers = []#使用しない
+tempo_mod = 0
+count = 0
+
+wb = xlrd.open_workbook('一括USTdata/data一覧実験用(temp修正).xlsx')
+sheet = wb.sheet_by_name('Sheet1')
+book = openpyxl.load_workbook('一括USTdata/data一覧実験用(temp修正).xlsx')
+
+
+for i in range((book['Sheet1'].max_row)-1):
+    data = []
+    text = "16分割USTdata/"
+    #楽譜の条件:sheet.cell_value(i+1, x) = y
+    #x=0(UST製作者y),x=1(曲番y),x=2(曲番y ※y=1のみ使用),x=4(学習用フラグy)
+    if sheet.cell_value(i+1, 0) == 1 and sheet.cell_value(i+1, 4) == 1:
+        for file in glob.glob(filename(i)):
+            print(file)
+            data=fileload(file)#UST読み込み
+            Set_part = data_make_part(data)#必要なデータ抽出
+            tempo_mod = sheet.cell_value(i+1, 15)
+            Set_input_part,Set_output_binary_part,Set_output_7s_part,numbers = data_make(Set_part,tempo_mod)
+            #print(len(Set_input)/32)
+            #print(len(numbers))
+            Set_input.extend(Set_input_part)
+            Set_output_binary.extend(Set_output_binary_part)
+            Set_output_7s.extend(Set_output_7s_part)
+            count = count + 1 
+
+for i in range(len(Set_input)):
+    Set_input2.append(Set_input[i].copy())
+Set_input2 = Inormalize(Set_input2)
+
+x1_train = np.array(Set_input2).reshape((-1, 32,4))
+x1_train = x1_train.astype(np.float32)
+y1_train = np.array(Set_output_binary)
+y1_train = to_categorical(y1_train) 
+
+hidden_size = 16
+
+model = Sequential() 
+model.add(LSTM(units=hidden_size,input_shape=(32,4),activation='tanh'))
+model.add(Dense(units=3,activation='softmax'))#2
+
+model.compile(optimizer='adam',loss='categorical_crossentropy',metrics=['accuracy'])
+tsb=TensorBoard(log_dir='./logs')
+history_adom=model.fit(x1_train,y1_train,batch_size=2048,epochs=1000,validation_split=0.1,callbacks=[tsb])#128
+model.save('20201002_Pitch_A.h5')
+
+import pandas as pd
+import matplotlib.pyplot as plt
+%config InlineBackend.figure_formats = {'png', 'retina'}
+plt.subplot(1, 2, 2)
+plt.plot(history_adom.history["loss"], label = "loss")
+plt.plot(history_adom.history["val_loss"], label = "val_loss")
+plt.xlabel("epoch")
+plt.ylabel("loss")
+plt.title("loss")
+plt.legend(loc="best")
+plt.grid(color = 'gray', alpha = 0.2)
+plt.show()
+plt.subplot(1, 2, 2)
+plt.plot(history_adom.history["acc"], label = "acc")
+plt.plot(history_adom.history["val_acc"], label = "val_acc")
+plt.xlabel("epoch")
+plt.ylabel("acc")
+plt.title("acc")
+plt.legend(loc="best")
+plt.grid(color = 'gray', alpha = 0.2)
+plt.show()
+
+
+
+Set_output2_keep = []
+Set_input3 = []
+Set_output2 = []
+mean_all = []
+var_all = []
+
+for i in range(len(Set_output_binary)):
+    if Set_output_binary[i] == 2:#ヴィブラートが存在する場合
+        Set_output2_keep.append(Set_output_7s[i])
+        Set_input3.append(Set_input2[i*32:(i+1)*32])
+
+#float型以外が混ざってないか判定(float型が紛れていた場合errorをprint)
+for i in range(len(Set_output2_keep)):
+    for j in range(len(Set_output2_keep[i])):
+        if number(Set_output2_keep[i][j]) == False:
+            print("error")
+        Set_output2.append(Set_output2_keep[i][j])
+    
+#出力データを正規化
+mean_all,var_all,Set_output2 = Znormalize(Set_output2)
+
+x_train2 = np.array(Set_input3).reshape(-1, 32, 4)
+y_train2 = np.array(Set_output2).reshape(-1, 7)
+
+#学習モデル作成
+hidden_size = spliter
+model = Sequential() 
+model.add(LSTM(units=hidden_size,input_shape=(32,4),activation='tanh'))#32,32,38
+model.add(Dense(units=7,activation='linear'))#3
+
+model.compile(optimizer='adam',loss='mean_squared_error',metrics=['accuracy'])
+tsb=TensorBoard(log_dir='./logs')
+history_adom=model.fit(x_train2,y_train2,batch_size=128,epochs=3000,validation_split=0.1,callbacks=[tsb])#128
+model.save('20201002_Pitch_A2.h5')
+
+import pandas as pd
+import matplotlib.pyplot as plt
+%config InlineBackend.figure_formats = {'png', 'retina'}
+plt.subplot(1, 2, 2)
+plt.plot(history_adom.history["loss"], label = "loss")
+plt.plot(history_adom.history["val_loss"], label = "val_loss")
+plt.xlabel("epoch")
+plt.ylabel("loss")
+plt.title("loss")
+plt.legend(loc="best")
+plt.grid(color = 'gray', alpha = 0.2)
+plt.show()
+plt.subplot(1, 2, 2)
+plt.plot(history_adom.history["acc"], label = "acc")
+plt.plot(history_adom.history["val_acc"], label = "val_acc")
+plt.xlabel("epoch")
+plt.ylabel("acc")
+plt.title("acc")
+plt.legend(loc="best")
+plt.grid(color = 'gray', alpha = 0.2)
+plt.show()
+
+
+
+#ヴィブラート位置推定
+import glob
+data_test = []
+Set_part_test = []
+Set_input_test = []
+Set_input_test2 = []
+data1 = []
+data2 = []
+numbers_test = []
+z_train = []
+tempo_mod = 2
+
+for file in glob.glob('実験用フォルダ/オリジナルE1*.ust'):
+    data_test=fileload(file)
+    Set_part_test = data_make_part(data_test)
+    Set_input_test,data1,data2,numbers_test = data_make(Set_part_test,tempo_mod)
+
+for i in range(len(Set_input_test)):
+    Set_input_test2.append(Set_input_test[i].copy())
+Set_input_test2 = Inormalize(Set_input_test2)
+
+z_train = np.array(Set_input_test2).reshape(-1, 32,4)
+
+model = load_model('20201002_Pitch_E1.h5')#学習済みモデル
+pred = model.predict(z_train, batch_size=64, verbose=0)
+predlist = pred.tolist()
+print(predlist)
+
+predlist1 = []#ヴィブラートの出現箇所(音符ごとに表記)
+VBR_set = []
+
+for i in range(len(predlist)):
+    predlist1.append(predlist[i].index(max(predlist[i])))
+
+for i in range(len(predlist1)):
+    if predlist1[i] == 2:
+        print(numbers_test[i])
+        VBR_set.append([65,180,35,20,20,0,0])
+        
+#結果を元にUSTを変更
+new_data = data_test
+x = 0
+check = 0
+
+for i in range(len(predlist1)):
+    if predlist1[i] == 2:
+        VBR_insert = "VBR="+str(round(VBR_set[x][0],1))+","+str(round(VBR_set[x][1],1))+","+str(round(VBR_set[x][2],1))+","+str(round(VBR_set[x][3],1))+","+str(round(VBR_set[x][4],1))+","+str(round(VBR_set[x][5],1))+","+str(round(VBR_set[x][6],1))
+        x = x + 1
+        search = "[#"
+        if len(str(numbers_test[i])) <= 3:
+            for x in range(4-len(str(i))):
+                search = search + "0"
+        search = search + str(numbers_test[i]) + "]"
+        for j in range(len(new_data)):
+            if new_data[j] == search:
+                check = 1
+            if check == 1 and new_data[j][0:7] == "NoteNum":
+                new_data.insert(j+1, VBR_insert)
+                check = 0
+
+for i in range(len(new_data)):
+    print(new_data[i])
+
+file = open('実験用フォルダ/vbr1.ust',"w")
+for i in range(len(new_data)):
+    file.write(new_data[i])
+    file.write('\n')
+file.close()
+
+
+
+#ヴィブラートパラメータ推定
+import glob
+data = []
+Set_part = []
+Set_output_binary_part = []
+Set_output_7s_part = []
+Set_input = []
+Set_output_binary = []
+Set_output_7s = []
+numbers = []
+
+Set_output2_keep = []
+Set_output2 = []
+mean_all = []
+var_all = []
+tempo_mod = 0
+
+#学習データの平均と分散を読み込み
+wb = xlrd.open_workbook('一括USTdata/data一覧実験用(temp修正).xlsx')
+sheet = wb.sheet_by_name('Sheet1')
+book = openpyxl.load_workbook('一括USTdata/data一覧実験用(temp修正).xlsx')
+
+for i in range((book['Sheet1'].max_row)-1):
+    data = []
+    text = "一括USTdata/"
+    #sheet.cell_valueに学習データと同じ条件を入れる、今回は作曲者番号[1,7,9,44,100]
+    #if sheet.cell_value(i+1, 36) == 6:
+    if sheet.cell_value(i+1, 0) == 100 and sheet.cell_value(i+1, 4) == 1:
+        for file in glob.glob(filename(i)):
+            print(file)
+            data=fileload(file)#UST読み込み
+            Set_part = data_make_part(data)#必要なデータ抽出
+            tempo_mod = sheet.cell_value(i+1, 15)
+            Set_input,Set_output_binary_part,Set_output_7s_part,numbers = data_make(Set_part,tempo_mod)
+            Set_output_binary.extend(Set_output_binary_part)
+            Set_output_7s.extend(Set_output_7s_part)
+
+#ヴィブラートが存在する箇所のみにしぼる
+for i in range(len(Set_output_binary)):
+    if Set_output_binary[i] == 2:#ヴィブラートが存在する場合
+        Set_output2_keep.append(Set_output_7s[i])
+
+#float型以外が混ざってないか判定(float型が紛れていた場合errorをprint)
+for i in range(len(Set_output2_keep)):
+    for j in range(len(Set_output2_keep[i])):
+        if number(Set_output2_keep[i][j]) == False:
+            print("error")
+        Set_output2.append(Set_output2_keep[i][j])
+        
+#学習データの平均と分散を算出
+mean_all,var_all,Set_output2 = Znormalize(Set_output2)
+
+#予測
+import glob
+data_test = []
+Set_part_test = []
+Set_input_test = []
+Set_input_test2 = []
+Set_input_test3 = []
+Set_output_binary_test = []
+data2 = []
+numbers_test = []
+numbers_test2 = []
+tempo_mod = 2
+
+for file in glob.glob('実験用フォルダ/E3a*.ust'):
+    print(file)
+    data_test=fileload(file)
+    Set_part_test = data_make_part(data_test)
+    Set_input_test,Set_output_binary_test,data2,numbers_test = data_make(Set_part_test,tempo_mod)
+
+for i in range(len(Set_input_test)):
+    Set_input_test2.append(Set_input_test[i].copy())
+Set_input_test2 = Inormalize(Set_input_test2)
+
+for i in range(len(Set_output_binary_test)):
+    if Set_output_binary_test[i] == 2:#ヴィブラートの出現箇所のみにしぼる
+        Set_input_test3.append(Set_input_test2[int(i/7)*32:(int(i/7)+1)*32])
+        numbers_test2.append(numbers_test[i])
+
+z_train2 = np.array(Set_input_test3).reshape((-1, 32,4))
+
+model = load_model('20201002_Pitch_E2.h5')
+pred = model.predict(z_train2, batch_size=64, verbose=0)
+predlist_new = pred.tolist()
+VBR_set = reZnormalize(predlist_new,mean_all,var_all)
+for i in range(len(VBR_set)):
+    for j in range(7):
+        if j == 0 and VBR_set[i][j] <= 0:
+            VBR_set[i][j] = 0.1
+        if j == 1 and VBR_set[i][j] < 64:
+            VBR_set[i][j] = 64
+        if j == 2 and VBR_set[i][j] <= 0:
+            VBR_set[i][j] = 0.1
+        if j >= 3 and VBR_set[i][j] < 0:
+            VBR_set[i][j] = 0
+print(VBR_set)
+
+#結果を元にUSTを変更
+new_data = data_test
+x = 0
+check = 0
+                
+for i in range(len(new_data)):
+    if new_data[i][0:3] == "VBR":
+        new_data[i] = ""
+                
+for i in range(len(numbers_test2)):
+    if numbers_test[i] != -1:
+        VBR_insert = "VBR="+str(round(VBR_set[x][0],1))+","+str(round(VBR_set[x][1],1))+","+str(round(VBR_set[x][2],1))+","+str(round(VBR_set[x][3],1))+","+str(round(VBR_set[x][4],1))+","+str(round(VBR_set[x][5],1))+","+str(round(VBR_set[x][6],1))
+        x = x + 1
+        search = "[#"
+        if len(str(numbers_test2[i])) <= 3:
+            for x in range(4-len(str(numbers_test2[i]))):
+                search = search + "0"
+        search = search + str(numbers_test2[i]) + "]"
+        print(search)
+        for j in range(len(new_data)):
+            if new_data[j] == search:
+                check = 1
+            if check == 1 and new_data[j][0:7] == "NoteNum":
+                new_data.insert(j+1, VBR_insert)
+                check = 0
+
+for i in range(len(new_data)):
+    print(new_data[i])
+
+file = open('実験用フォルダ/vbr2.ust',"w")
+for i in range(len(new_data)):
+    file.write(new_data[i])
+    file.write('\n')
+file.close()
